@@ -1,0 +1,89 @@
+#!/bin/sh	
+
+if ! [ "$(id -u)" = 0 ]; then
+  echo
+  echo "You are not root, run sudo make install"
+  echo
+
+  exit 1
+fi
+
+echo Starting cluster install...
+echo Warning! This will reinstall or install microk8s cluster...
+sleep 5
+
+set -ex
+
+apt install -y curl ufw snapd
+
+snap set system snapshots.automatic.retention=no
+snap enable microk8s || true
+snap remove --purge microk8s kubectl helm docker
+
+rm -rf /var/snap/microk8s
+
+snap install microk8s --classic --channel=1.14/stable
+snap alias microk8s.kubectl kubectl
+
+# allow-privileged pods
+echo "--allow-privileged=true" | tee -a /var/snap/microk8s/current/args/kube-apiserver
+echo "--allow-privileged=true" | tee -a /var/snap/microk8s/current/args/kubelet
+
+systemctl restart snap.microk8s.daemon-kubelet.service
+systemctl restart snap.microk8s.daemon-apiserver.service
+
+rm -rf /usr/local/bin/helm
+
+# install helm v2.14.0
+curl -o helm.tar.gz https://get.helm.sh/helm-v2.14.0-linux-amd64.tar.gz
+tar -xvf helm.tar.gz
+mv linux-amd64/helm /usr/local/bin/helm
+rm helm.tar.gz
+rm -rf linux-amd64
+
+# flush iptables
+iptables -t nat -F
+iptables -t mangle -F
+iptables -F
+iptables -X
+
+# configure your firewall to allow pod-to-pod and pod-to-internet communication:
+ufw allow in on cni0
+ufw allow out on cni0
+ufw default allow routed
+
+echo '{"insecure-registries" : ["localhost:32000"]}' | tee /etc/docker/daemon.json
+
+iptables -P FORWARD ACCEPT
+service docker restart
+
+# clear fluent pos
+rm -rf /var/log/fluentd-containers.log.pos
+
+# preloads cluster images in microk8s
+# kubectl get events --all-namespaces | grep Pulling
+microk8s.ctr -n k8s.io image pull docker.io/cdkbot/registry-amd64:2.6
+microk8s.ctr -n k8s.io image pull quay.io/kubernetes-ingress-controller/nginx-ingress-controller-amd64:0.22.0
+microk8s.ctr -n k8s.io image pull gcr.io/google_containers/defaultbackend-amd64:1.4
+microk8s.ctr -n k8s.io image pull docker.io/cdkbot/hostpath-provisioner-amd64:latest
+microk8s.ctr -n k8s.io image pull gcr.io/google_containers/k8s-dns-kube-dns-amd64:1.14.7
+microk8s.ctr -n k8s.io image pull gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64:1.14.7
+microk8s.ctr -n k8s.io image pull gcr.io/google_containers/k8s-dns-sidecar-amd64:1.14.7
+microk8s.ctr -n k8s.io image pull gcr.io/kubernetes-helm/tiller:v2.14.0
+
+microk8s.enable dns ingress registry
+
+mkdir -p ~/.kube
+microk8s.kubectl config view --raw | tee ~/.kube/config
+
+kubectl -n kube-system create serviceaccount tiller
+helm init --service-account tiller
+
+# wait deployments
+kubectl -n kube-system wait --for=condition=available --timeout=600s deployment/tiller-deploy
+kubectl -n container-registry wait --for=condition=available --timeout=600s deployment/registry
+
+# wait pods
+kubectl -n kube-system wait pods --all --for=condition=Ready --timeout=600s
+kubectl -n container-registry wait pods --all --for=condition=Ready --timeout=600s
+kubectl -n default wait pods --all --for=condition=Ready --timeout=600s
