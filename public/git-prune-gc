@@ -1,0 +1,6 @@
+#!/bin/sh
+
+git branch | xargs git branch -d -f || true
+git fetch --all --prune --prune-tags
+git gc --prune=all
+git pull
