@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 set -ex
 
@@ -10,6 +10,8 @@ EOF
 
 export EDITOR=nano
 export do="--dry-run=client -o yaml"
-alias k=kubectl
+
 source <(kubectl completion bash)
+
+alias k=kubectl
 complete -F __start_kubectl k
