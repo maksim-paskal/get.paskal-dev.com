@@ -9,6 +9,7 @@ function check_service {
   mkdir -p $TMPDIR/logs/
 
   journalctl -n 100000 --unit=k3s > $TMPDIR/logs/journalctl-k3s
+  journalctl -n 100000 --unit=docker > $TMPDIR/logs/journalctl-docker
 }
 
 function check_apparmor {
@@ -85,7 +86,6 @@ function check_memory {
 }
 
 function store_kubernetes_info {
-  # Collect some in-k8s details
   printf -- '  Inspect kubernetes cluster\n'
   mkdir -p $TMPDIR/k8s
   /usr/local/bin/k3s check-config 2>&1 | tee $TMPDIR/k8s/check-config > /dev/null
@@ -95,6 +95,18 @@ function store_kubernetes_info {
   /usr/local/bin/k3s kubectl get all --all-namespaces -o wide 2>&1 | tee $TMPDIR/k8s/get-all > /dev/null
   /usr/local/bin/k3s kubectl get pv 2>&1 | tee $TMPDIR/k8s/get-pv > /dev/null # 2>&1 redirects stderr and stdout to /dev/null if no resources found
   /usr/local/bin/k3s kubectl get pvc 2>&1 | tee $TMPDIR/k8s/get-pvc > /dev/null # 2>&1 redirects stderr and stdout to /dev/null if no resources found
+}
+
+function store_docker_info {
+  printf -- '  Inspect docker settings \n'
+  mkdir -p $TMPDIR/docker
+  if [ -f /etc/docker/daemon.json ]
+  then
+    cp /etc/docker/daemon.json $TMPDIR/docker/daemon.json
+  fi
+  /usr/bin/docker info 2>&1 | tee $TMPDIR/docker/info > /dev/null
+  /usr/bin/docker system df 2>&1 | tee $TMPDIR/docker/df > /dev/null
+  /usr/bin/docker ps 2>&1 | tee $TMPDIR/docker/ps > /dev/null
 }
 
 function build_report_tarball {
@@ -123,6 +135,7 @@ check_apparmor
 printf -- 'Gathering system information\n'
 store_sys
 store_network
+store_docker_info
 
 printf -- 'Inspecting kubernetes cluster\n'
 store_kubernetes_info
