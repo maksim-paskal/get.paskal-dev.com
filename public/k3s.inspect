@@ -1,0 +1,129 @@
+#!/bin/bash
+
+TMPDIR=$(mktemp -d $MKTEMP_BASEDIR)
+
+function check_service {
+  mkdir -p $TMPDIR/logs/
+
+  journalctl -n 100000 --unit=k3s > $TMPDIR/logs/journalctl-k3s
+}
+
+function check_apparmor {
+  # Collect apparmor info.
+  mkdir -p $TMPDIR/apparmor
+  if [ -f /etc/apparmor.d/containerd ]
+  then
+    cp /etc/apparmor.d/containerd $TMPDIR/apparmor/
+  fi
+  dmesg &> $TMPDIR/apparmor/dmesg
+  aa-status &> $TMPDIR/apparmor/aa-status
+}
+
+function store_network {
+  # Collect network setup.
+  printf -- '  Copy network configuration to the final report tarball\n'
+  mkdir -p $TMPDIR/network
+  ss -pln &> $TMPDIR/network/ss
+  ip addr &> $TMPDIR/network/ip-addr
+  iptables -t nat -L -n -v &> $TMPDIR/network/iptables
+  iptables -S &> $TMPDIR/network/iptables-S
+  iptables -L &> $TMPDIR/network/iptables-L
+}
+
+function store_sys {
+  # Generate sys directory
+  mkdir -p $TMPDIR/sys
+  # collect the processes running
+  printf -- '  Copy processes list to the final report tarball\n'
+  ps -ef > $TMPDIR/sys/ps
+  printf -- '  Copy snap list to the final report tarball\n'
+  snap version > $TMPDIR/sys/snap-version
+  snap list > $TMPDIR/sys/snap-list
+  # Stores VM name (or none, if we are not on a VM)
+  printf -- '  Copy VM name (or none) to the final report tarball\n'
+  systemd-detect-virt &> $TMPDIR/sys/vm_name
+  # Store disk usage information
+  printf -- '  Copy disk usage information to the final report tarball\n'
+  df -h | grep ^/ &> $TMPDIR/sys/disk_usage # remove the grep to also include virtual in-memory filesystems
+  # Store memory usage information
+  printf -- '  Copy memory usage information to the final report tarball\n'
+  free -m &> $TMPDIR/sys/memory_usage
+  # Store server's uptime.
+  printf -- '  Copy server uptime to the final report tarball\n'
+  uptime &> $TMPDIR/sys/uptime
+  # Store the current linux distro.
+  printf -- '  Copy current linux distribution to the final report tarball\n'
+  lsb_release -a &> $TMPDIR/sys/lsb_release
+  # Store openssl information.
+  printf -- '  Copy openSSL information to the final report tarball\n'
+  openssl version -v -d -e &> $TMPDIR/sys/openssl
+}
+
+function check_certificates {
+  exp_date_str="$(openssl x509 -enddate -noout -in /var/lib/rancher/k3s/server/tls/server-ca.crt | cut -d= -f 2)"
+  exp_date_secs="$(date -d "$exp_date_str" +%s)"
+  now_secs=$(date +%s)
+  difference=$(($exp_date_secs-$now_secs))
+  days=$(($difference/(3600*24)))
+  if [ "3" -ge $days ];
+  then
+    printf -- '\033[0;33mWARNING: \033[0m This deployments certificates will expire in $days days. \n'
+  fi
+}
+
+function check_memory {
+  MEMORY=`cat /proc/meminfo | grep MemTotal | awk '{ print $2 }'`
+  if [ $MEMORY -le 524288 ]
+  then
+    printf -- "\033[0;33mWARNING: \033[0m This system has ${MEMORY} bytes of RAM available.\n"
+    printf -- "It may not be enough to run the Kubernetes control plane services.\n"
+    printf -- "Consider joining as a worker-only to a cluster.\n"
+  fi
+}
+
+function store_kubernetes_info {
+  # Collect some in-k8s details
+  printf -- '  Inspect kubernetes cluster\n'
+  mkdir -p $TMPDIR/k8s
+  /usr/local/bin/k3s check-config 2>&1 | tee $TMPDIR/k8s/check-config > /dev/null
+  /usr/local/bin/k3s kubectl version 2>&1 | tee $TMPDIR/k8s/version > /dev/null
+  /usr/local/bin/k3s kubectl cluster-info 2>&1 | tee $TMPDIR/k8s/cluster-info > /dev/null
+  /usr/local/bin/k3s kubectl cluster-info dump -A 2>&1 | tee $TMPDIR/k8s/cluster-info-dump > /dev/null
+  /usr/local/bin/k3s kubectl get all --all-namespaces -o wide 2>&1 | tee $TMPDIR/k8s/get-all > /dev/null
+  /usr/local/bin/k3s kubectl get pv 2>&1 | tee $TMPDIR/k8s/get-pv > /dev/null # 2>&1 redirects stderr and stdout to /dev/null if no resources found
+  /usr/local/bin/k3s kubectl get pvc 2>&1 | tee $TMPDIR/k8s/get-pvc > /dev/null # 2>&1 redirects stderr and stdout to /dev/null if no resources found
+}
+
+function build_report_tarball {
+  # Tar and gz the report
+  local now_is=$(date +"%Y%m%d_%H%M%S")
+  tar -C ${TMPDIR} -cf ${TMPDIR}/inspection-report-${now_is}.tar inspection-report &> /dev/null
+  gzip ${TMPDIR}/inspection-report-${now_is}.tar
+  printf -- '  Report tarball is at %s/inspection-report-%s.tar.gz\n' "${TMPDIR}" "${now_is}"
+}
+
+################
+
+printf -- 'Inspecting system\n'
+check_memory
+
+printf -- 'Inspecting certificates\n'
+check_certificates
+
+printf -- 'Inspecting services\n'
+check_service
+
+printf -- 'Inspecting AppArmor configuration\n'
+check_apparmor
+
+printf -- 'Gathering system information\n'
+store_sys
+store_network
+
+printf -- 'Inspecting kubernetes cluster\n'
+store_kubernetes_info
+
+printf -- 'Building the report tarball\n'
+build_report_tarball
+
+chmod 777 -R $TMPDIR
