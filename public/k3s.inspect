@@ -1,6 +1,9 @@
 #!/bin/bash
 
-TMPDIR=$(mktemp -d $MKTEMP_BASEDIR)
+TMPDIR=/tmp/k3s.inspect
+
+rm -rf $TMPDIR
+mkdir -p $TMPDIR
 
 function check_service {
   mkdir -p $TMPDIR/logs/
@@ -97,9 +100,10 @@ function store_kubernetes_info {
 function build_report_tarball {
   # Tar and gz the report
   local now_is=$(date +"%Y%m%d_%H%M%S")
-  tar -C ${TMPDIR} -cf ${TMPDIR}/inspection-report-${now_is}.tar inspection-report &> /dev/null
-  gzip ${TMPDIR}/inspection-report-${now_is}.tar
-  printf -- '  Report tarball is at %s/inspection-report-%s.tar.gz\n' "${TMPDIR}" "${now_is}"
+  tar -C ${TMPDIR} -cf ${TMPDIR}-${now_is}.tar . &> /dev/null
+  gzip ${TMPDIR}-${now_is}.tar
+  chmod 777 ${TMPDIR}-${now_is}.tar.gz
+  printf -- '  Report tarball is at %s-%s.tar.gz\n' "${TMPDIR}" "${now_is}"
 }
 
 ################
@@ -125,5 +129,3 @@ store_kubernetes_info
 
 printf -- 'Building the report tarball\n'
 build_report_tarball
-
-chmod 777 -R $TMPDIR
