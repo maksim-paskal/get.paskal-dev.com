@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -ex
+
+# stop all k3s
+/usr/local/bin/k3s-killall.sh
+
+# kill all docker containers
+for container in $(docker ps -q); do
+  docker kill "$container" || true
+done
+
+docker container prune -f
+
+# start k3s
+service k3s start
+
+set +ex
+echo 
+echo Kubernetes cluster restarted
+echo 
