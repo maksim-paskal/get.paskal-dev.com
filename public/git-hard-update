@@ -1,0 +1,6 @@
+#!/bin/sh
+
+tag=$(git rev-parse --abbrev-ref HEAD)
+
+git fetch --all
+git reset --hard "origin/$tag"
